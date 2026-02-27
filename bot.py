@@ -1,14 +1,20 @@
 import os
 import time
 import asyncio
+import re
 from telegram import Bot
 from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.by import By
-import re
+from selenium.webdriver.chrome.service import Service
+from webdriver_manager.chrome import ChromeDriverManager
 
+# ================= VARIÁVEIS =================
 TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
+
+if not TOKEN or not CHAT_ID:
+    raise Exception("⚠️ Variáveis TOKEN e CHAT_ID não definidas no Railway!")
 
 bot = Bot(TOKEN)
 enviados = set()  # evitar duplicados
@@ -23,17 +29,23 @@ def parse_price_to_float(price_str):
     return float(m.group(1).replace('.', '').replace(',', '.'))
 
 async def enviar(msg):
-    await bot.send_message(chat_id=CHAT_ID, text=msg)
+    await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML", disable_web_page_preview=False)
 
 def enviar_oferta(termo, titulo, preco, link, origem):
     if link in enviados:
         return
     enviados.add(link)
-    msg = f"🔎 <b>{origem}</b>\n📦 <b>{termo}</b>\n💰 <b>{preco}</b>\n🔗 <a href='{link}'>Abrir oferta</a>\n\n📌 <i>{titulo}</i>"
+    msg = (
+        f"🔎 <b>{origem}</b>\n"
+        f"📦 <b>{termo}</b>\n"
+        f"💰 <b>{preco}</b>\n"
+        f"🔗 <a href='{link}'>Abrir oferta</a>\n\n"
+        f"📌 <i>{titulo}</i>"
+    )
     try:
         asyncio.run(enviar(msg))
-    except:
-        pass
+    except Exception as e:
+        print("Erro ao enviar mensagem:", e)
 
 # ================= CARREGAR PRODUTOS =================
 def carregar_produtos():
@@ -41,19 +53,21 @@ def carregar_produtos():
     with open("produtos.txt", "r", encoding="utf-8") as f:
         for linha in f:
             linha = linha.strip()
-            if not linha or linha.lstrip().startswith("#"):
+            if not linha or linha.startswith("#"):
                 continue
-
             partes = [p.strip() for p in linha.split("|")]
             termo = partes[0]
             max_val = None
             for p in partes[1:]:
                 if p.lower().startswith("max="):
-                    max_val = float(p.split("=")[1].replace(",", "."))
+                    try:
+                        max_val = float(p.split("=")[1].replace(",", "."))
+                    except:
+                        pass
             termos.append((termo, max_val))
     return termos
 
-# ================= SELENIUM =================
+# ================= CRIAR DRIVER =================
 def criar_driver():
     options = Options()
     options.add_argument("--headless=new")
@@ -62,13 +76,14 @@ def criar_driver():
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
     options.binary_location = "/usr/bin/chromium"
-    return webdriver.Chrome(options=options)
+    service = Service(ChromeDriverManager().install())
+    return webdriver.Chrome(service=service, options=options)
 
 # ================= BUSCAR AMAZON =================
 def buscar_amazon(termo, max_val=None):
     driver = criar_driver()
     driver.get(f"https://www.amazon.com.br/s?k={termo.replace(' ','+')}")
-    time.sleep(5)
+    time.sleep(5)  # espera carregar JavaScript
 
     produtos = driver.find_elements(By.CSS_SELECTOR, "div.s-result-item")
     resultados = []
@@ -104,10 +119,13 @@ def main():
         try:
             for termo, max_val in termos:
                 print("Buscando:", termo)
-                for titulo, preco, link in buscar_amazon(termo, max_val):
+                resultados = buscar_amazon(termo, max_val)
+                for titulo, preco, link in resultados:
                     enviar_oferta(termo, titulo, preco, link, "Amazon")
         except Exception as e:
             print("Erro geral:", e)
+
+        print("Aguardando 1 hora para próxima busca...")
         time.sleep(3600)  # roda a cada 1 hora
 
 if __name__ == "__main__":
