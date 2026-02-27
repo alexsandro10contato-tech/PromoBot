@@ -1,128 +1,114 @@
-import requests
-from bs4 import BeautifulSoup
-from telegram import Bot
-import time
 import os
+import time
+import asyncio
+from telegram import Bot
+from selenium import webdriver
+from selenium.webdriver.chrome.options import Options
+from selenium.webdriver.common.by import By
 import re
 
-TOKEN = os.getenv("TELEGRAM_TOKEN")
+TOKEN = os.getenv("TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")
-MAX_PRICE_GLOBAL = float(os.getenv("MAX_PRICE")) if os.getenv("MAX_PRICE") else None
-
-if not TOKEN or not CHAT_ID:
-    raise RuntimeError("Defina as variáveis de ambiente TELEGRAM_TOKEN e CHAT_ID no painel do Pella.")
 
 bot = Bot(TOKEN)
+enviados = set()  # evitar duplicados
 
-# --- Utilidades ---
-
-def parse_price_to_float(price_str: str):
-    """Converte 'R$ 1.234,56' -> 1234.56 ; '1.299' -> 1299.0"""
+# ================= AUXILIARES =================
+def parse_price_to_float(price_str):
     if not price_str:
         return None
     m = re.search(r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})|\d+(?:,\d{2})?)', price_str)
     if not m:
         return None
-    val = m.group(1).replace('.', '').replace(',', '.')
+    return float(m.group(1).replace('.', '').replace(',', '.'))
+
+async def enviar(msg):
+    await bot.send_message(chat_id=CHAT_ID, text=msg)
+
+def enviar_oferta(termo, titulo, preco, link, origem):
+    if link in enviados:
+        return
+    enviados.add(link)
+    msg = f"🔎 <b>{origem}</b>\n📦 <b>{termo}</b>\n💰 <b>{preco}</b>\n🔗 <a href='{link}'>Abrir oferta</a>\n\n📌 <i>{titulo}</i>"
     try:
-        return float(val)
+        asyncio.run(enviar(msg))
     except:
-        return None
+        pass
 
-
-def parse_produto_line(line: str):
-    """
-    Entrada: 'iphone 13 | max=2500' -> ('iphone 13', {'max': 2500.0})
-    Suporta: max=, min=
-    """
-    parts = [p.strip() for p in line.split('|')]
-    termo = parts[0]
-    config = {}
-    if len(parts) > 1:
-        for chunk in parts[1:]:
-            if chunk.lower().startswith('max='):
-                try:
-                    config['max'] = float(chunk.split('=', 1)[1].strip().replace(',', '.'))
-                except:
-                    pass
-            if chunk.lower().startswith('min='):
-                try:
-                    config['min'] = float(chunk.split('=', 1)[1].strip().replace(',', '.'))
-                except:
-                    pass
-    return termo, config
-
-
-# --- Consulta simples ao Google Shopping ---
-
-def pesquisar_google(termo, max_local=None, min_local=None):
-    url = f"https://www.google.com/search?q={termo.replace(' ', '+')}+comprar&tbm=shop&hl=pt-BR"
-    headers = {"User-Agent": "Mozilla/5.0"}
-    r = requests.get(url, headers=headers, timeout=20)
-    soup = BeautifulSoup(r.text, "html.parser")
-
-    itens = soup.select("div.sh-dgr__content")
-    ofertas = []
-    for item in itens[:10]:
-        title_el = item.select_one("h3")
-        price_el = item.select_one(".a8Pemb")
-        link_el = item.select_one("a")
-
-        titulo = title_el.text.strip() if title_el else ""
-        preco_txt = price_el.text.strip() if price_el else ""
-        link = ("https://www.google.com" + link_el.get("href")) if (link_el and link_el.get("href")) else ""
-
-        preco_float = parse_price_to_float(preco_txt)
-
-        # filtros
-        if preco_float is not None:
-            if min_local is not None and preco_float < min_local:
-                continue
-            if max_local is not None and preco_float > max_local:
-                continue
-            if max_local is None and MAX_PRICE_GLOBAL is not None and preco_float > MAX_PRICE_GLOBAL:
-                continue
-
-        if titulo and link:
-            ofertas.append((titulo, preco_txt, preco_float, link))
-    return ofertas
-
-
-def carregar_produtos_config():
-    linhas = []
+# ================= CARREGAR PRODUTOS =================
+def carregar_produtos():
+    termos = []
     with open("produtos.txt", "r", encoding="utf-8") as f:
-        for raw in f.readlines():
-            line = raw.strip()
-            if not line or line.startswith('#'):
+        for linha in f:
+            linha = linha.strip()
+            if not linha or linha.lstrip().startswith("#"):
                 continue
-            termo, cfg = parse_produto_line(line)
-            linhas.append((termo, cfg))
-    return linhas
 
+            partes = [p.strip() for p in linha.split("|")]
+            termo = partes[0]
+            max_val = None
+            for p in partes[1:]:
+                if p.lower().startswith("max="):
+                    max_val = float(p.split("=")[1].replace(",", "."))
+            termos.append((termo, max_val))
+    return termos
 
-def enviar_oferta(termo, titulo, preco_txt, link):
-    msg = (
-        f"🔥 *Oferta encontrada!*\n\n"
-        f"📦 *Termo:* {termo}\n"
-        f"💰 *Preço:* {preco_txt}\n"
-        f"🔗 {link}\n\n"
-        f"📌 _{titulo}_"
-    )
-    bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="Markdown")
+# ================= SELENIUM =================
+def criar_driver():
+    options = Options()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--window-size=1920,1080")
+    options.binary_location = "/usr/bin/chromium"
+    return webdriver.Chrome(options=options)
 
+# ================= BUSCAR AMAZON =================
+def buscar_amazon(termo, max_val=None):
+    driver = criar_driver()
+    driver.get(f"https://www.amazon.com.br/s?k={termo.replace(' ','+')}")
+    time.sleep(5)
 
-def iniciar_bot():
-    print("Bot rodando 24h no Pella (limites por produto e global suportados).")
-    intervalo = int(os.getenv("CHECK_INTERVAL", "600"))  # padrão 10 minutos
+    produtos = driver.find_elements(By.CSS_SELECTOR, "div.s-result-item")
+    resultados = []
+
+    for p in produtos[:10]:
+        try:
+            titulo_el = p.find_element(By.CSS_SELECTOR, "h2 span")
+            preco_whole = p.find_element(By.CSS_SELECTOR, ".a-price-whole")
+            preco_fraction = p.find_element(By.CSS_SELECTOR, ".a-price-fraction")
+            link_el = p.find_element(By.CSS_SELECTOR, "h2 a")
+
+            titulo = titulo_el.text.strip()
+            preco_txt = preco_whole.text.strip() + "," + preco_fraction.text.strip()
+            preco_float = parse_price_to_float(preco_txt)
+            link = "https://www.amazon.com.br" + link_el.get_attribute("href")
+
+            if max_val and preco_float and preco_float > max_val:
+                continue
+
+            resultados.append((titulo, f"R$ {preco_txt}", link))
+        except:
+            continue
+
+    driver.quit()
+    return resultados
+
+# ================= LOOP PRINCIPAL =================
+def main():
+    termos = carregar_produtos()
+    print("Bot iniciado com produtos:", termos)
+
     while True:
-        termos = carregar_produtos_config()
-        for termo, cfg in termos:
-            ofertas = pesquisar_google(termo, max_local=cfg.get('max'), min_local=cfg.get('min'))
-            for titulo, preco_txt, preco_float, link in ofertas:
-                enviar_oferta(termo, titulo, preco_txt, link)
-                time.sleep(1)
-        time.sleep(intervalo)
-
+        try:
+            for termo, max_val in termos:
+                print("Buscando:", termo)
+                for titulo, preco, link in buscar_amazon(termo, max_val):
+                    enviar_oferta(termo, titulo, preco, link, "Amazon")
+        except Exception as e:
+            print("Erro geral:", e)
+        time.sleep(3600)  # roda a cada 1 hora
 
 if __name__ == "__main__":
-    iniciar_bot()
+    main()
