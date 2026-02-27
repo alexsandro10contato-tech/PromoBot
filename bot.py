@@ -2,12 +2,9 @@ import os
 import time
 import asyncio
 import re
+import requests
+from bs4 import BeautifulSoup
 from telegram import Bot
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from selenium.webdriver.common.by import By
-from selenium.webdriver.chrome.service import Service
-from webdriver_manager.chrome import ChromeDriverManager
 
 # ================= VARIÁVEIS =================
 TOKEN = os.getenv("TOKEN")
@@ -67,50 +64,43 @@ def carregar_produtos():
             termos.append((termo, max_val))
     return termos
 
-# ================= CRIAR DRIVER =================
-def criar_driver():
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument("--disable-gpu")
-    options.add_argument("--window-size=1920,1080")
+# ================= BUSCAR AMAZON COM REQUESTS =================
+def buscar_amazon_requests(termo, max_val=None):
+    url = f"https://www.amazon.com.br/s?k={termo.replace(' ','+')}"
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                      "AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/117.0.0.0 Safari/537.36"
+    }
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        r.raise_for_status()
+    except Exception as e:
+        print("Erro ao acessar Amazon:", e)
+        return []
 
-    # Caminhos corretos no Railway
-    options.binary_location = "/usr/bin/chromium"
-    service = Service("/usr/bin/chromedriver")
-
-    return webdriver.Chrome(service=service, options=options)
-
-# ================= BUSCAR AMAZON =================
-def buscar_amazon(termo, max_val=None):
-    driver = criar_driver()
-    driver.get(f"https://www.amazon.com.br/s?k={termo.replace(' ','+')}")
-    time.sleep(5)  # espera carregar JavaScript
-
-    produtos = driver.find_elements(By.CSS_SELECTOR, "div.s-result-item")
+    soup = BeautifulSoup(r.text, "html.parser")
     resultados = []
 
-    for p in produtos[:10]:
-        try:
-            titulo_el = p.find_element(By.CSS_SELECTOR, "h2 span")
-            preco_whole = p.find_element(By.CSS_SELECTOR, ".a-price-whole")
-            preco_fraction = p.find_element(By.CSS_SELECTOR, ".a-price-fraction")
-            link_el = p.find_element(By.CSS_SELECTOR, "h2 a")
+    for p in soup.select("div.s-result-item")[:10]:
+        titulo_el = p.select_one("h2 span")
+        preco_whole = p.select_one(".a-price-whole")
+        preco_fraction = p.select_one(".a-price-fraction")
+        link_el = p.select_one("h2 a")
 
-            titulo = titulo_el.text.strip()
-            preco_txt = preco_whole.text.strip() + "," + preco_fraction.text.strip()
-            preco_float = parse_price_to_float(preco_txt)
-            link = "https://www.amazon.com.br" + link_el.get_attribute("href")
-
-            if max_val and preco_float and preco_float > max_val:
-                continue
-
-            resultados.append((titulo, f"R$ {preco_txt}", link))
-        except:
+        if not (titulo_el and preco_whole and preco_fraction and link_el):
             continue
 
-    driver.quit()
+        titulo = titulo_el.text.strip()
+        preco_txt = preco_whole.text.strip() + "," + preco_fraction.text.strip()
+        preco_float = parse_price_to_float(preco_txt)
+        link = "https://www.amazon.com.br" + link_el.get("href")
+
+        if max_val and preco_float and preco_float > max_val:
+            continue
+
+        resultados.append((titulo, f"R$ {preco_txt}", link))
+
     return resultados
 
 # ================= LOOP PRINCIPAL =================
@@ -122,7 +112,7 @@ def main():
         try:
             for termo, max_val in termos:
                 print("Buscando:", termo)
-                resultados = buscar_amazon(termo, max_val)
+                resultados = buscar_amazon_requests(termo, max_val)
                 for titulo, preco, link in resultados:
                     enviar_oferta(termo, titulo, preco, link, "Amazon")
         except Exception as e:
