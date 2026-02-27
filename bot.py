@@ -15,7 +15,7 @@ if not TOKEN or not CHAT_ID:
 bot = Bot(TOKEN)
 enviados = set()
 
-# ================= AUXILIAR PREÇO =================
+# ================= EXTRAIR PREÇO =================
 def extrair_preco(texto):
     match = re.search(r'R\$\s?(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)', texto)
     if match:
@@ -31,27 +31,6 @@ async def enviar(msg):
         parse_mode="HTML",
         disable_web_page_preview=False
     )
-
-def enviar_oferta(termo, titulo, link, preco=None):
-    if link in enviados:
-        return
-
-    enviados.add(link)
-
-    preco_texto = f"💰 <b>R$ {preco:.2f}</b>\n" if preco else ""
-
-    msg = (
-        f"🔎 <b>Google Shopping</b>\n"
-        f"📦 <b>{termo}</b>\n"
-        f"{preco_texto}"
-        f"🔗 <a href='{link}'>Abrir oferta</a>\n\n"
-        f"📌 <i>{titulo}</i>"
-    )
-
-    try:
-        asyncio.run(enviar(msg))
-    except Exception as e:
-        print("Erro ao enviar mensagem:", e)
 
 # ================= CARREGAR PRODUTOS =================
 def carregar_produtos():
@@ -88,19 +67,17 @@ def buscar_google_rss(termo, max_val=None):
     for entry in feed.entries[:10]:
         titulo = entry.title
         link = entry.link
-
         preco = extrair_preco(titulo)
 
-        if max_val and preco:
-            if preco > max_val:
-                continue
+        if max_val and preco and preco > max_val:
+            continue
 
         resultados.append((titulo, link, preco))
 
     return resultados
 
 # ================= LOOP PRINCIPAL =================
-def main():
+async def main():
     termos = carregar_produtos()
     print("Bot iniciado com produtos:", termos)
 
@@ -111,13 +88,28 @@ def main():
                 resultados = buscar_google_rss(termo, max_val)
 
                 for titulo, link, preco in resultados:
-                    enviar_oferta(termo, titulo, link, preco)
+                    if link in enviados:
+                        continue
+
+                    enviados.add(link)
+
+                    preco_texto = f"💰 <b>R$ {preco:.2f}</b>\n" if preco else ""
+
+                    msg = (
+                        f"🔎 <b>Google Shopping</b>\n"
+                        f"📦 <b>{termo}</b>\n"
+                        f"{preco_texto}"
+                        f"🔗 <a href='{link}'>Abrir oferta</a>\n\n"
+                        f"📌 <i>{titulo}</i>"
+                    )
+
+                    await enviar(msg)
 
         except Exception as e:
             print("Erro geral:", e)
 
-        print("Aguardando 30 minutos para próxima busca...")
-        time.sleep(1800)
+        print("Aguardando 30 minutos...")
+        await asyncio.sleep(1800)
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())
