@@ -2,8 +2,7 @@ import os
 import time
 import asyncio
 import re
-import requests
-from bs4 import BeautifulSoup
+import feedparser
 from telegram import Bot
 
 # ================= VARIÁVEIS =================
@@ -14,31 +13,41 @@ if not TOKEN or not CHAT_ID:
     raise Exception("⚠️ Variáveis TOKEN e CHAT_ID não definidas no Railway!")
 
 bot = Bot(TOKEN)
-enviados = set()  # evitar duplicados
+enviados = set()
 
-# ================= AUXILIARES =================
-def parse_price_to_float(price_str):
-    if not price_str:
-        return None
-    m = re.search(r'(\d{1,3}(?:\.\d{3})*(?:,\d{2})|\d+(?:,\d{2})?)', price_str)
-    if not m:
-        return None
-    return float(m.group(1).replace('.', '').replace(',', '.'))
+# ================= AUXILIAR PREÇO =================
+def extrair_preco(texto):
+    match = re.search(r'R\$\s?(\d{1,3}(?:\.\d{3})*(?:,\d{2})?)', texto)
+    if match:
+        valor = match.group(1)
+        return float(valor.replace('.', '').replace(',', '.'))
+    return None
 
+# ================= ENVIAR TELEGRAM =================
 async def enviar(msg):
-    await bot.send_message(chat_id=CHAT_ID, text=msg, parse_mode="HTML", disable_web_page_preview=False)
+    await bot.send_message(
+        chat_id=CHAT_ID,
+        text=msg,
+        parse_mode="HTML",
+        disable_web_page_preview=False
+    )
 
-def enviar_oferta(termo, titulo, preco, link, origem):
+def enviar_oferta(termo, titulo, link, preco=None):
     if link in enviados:
         return
+
     enviados.add(link)
+
+    preco_texto = f"💰 <b>R$ {preco:.2f}</b>\n" if preco else ""
+
     msg = (
-        f"🔎 <b>{origem}</b>\n"
+        f"🔎 <b>Google Shopping</b>\n"
         f"📦 <b>{termo}</b>\n"
-        f"💰 <b>{preco}</b>\n"
+        f"{preco_texto}"
         f"🔗 <a href='{link}'>Abrir oferta</a>\n\n"
         f"📌 <i>{titulo}</i>"
     )
+
     try:
         asyncio.run(enviar(msg))
     except Exception as e:
@@ -52,54 +61,41 @@ def carregar_produtos():
             linha = linha.strip()
             if not linha or linha.startswith("#"):
                 continue
+
             partes = [p.strip() for p in linha.split("|")]
             termo = partes[0]
             max_val = None
+
             for p in partes[1:]:
                 if p.lower().startswith("max="):
                     try:
                         max_val = float(p.split("=")[1].replace(",", "."))
                     except:
                         pass
+
             termos.append((termo, max_val))
+
     return termos
 
-# ================= BUSCAR AMAZON COM REQUESTS =================
-def buscar_amazon_requests(termo, max_val=None):
-    url = f"https://www.amazon.com.br/s?k={termo.replace(' ','+')}"
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                      "AppleWebKit/537.36 (KHTML, like Gecko) "
-                      "Chrome/117.0.0.0 Safari/537.36"
-    }
-    try:
-        r = requests.get(url, headers=headers, timeout=10)
-        r.raise_for_status()
-    except Exception as e:
-        print("Erro ao acessar Amazon:", e)
-        return []
+# ================= BUSCAR GOOGLE RSS =================
+def buscar_google_rss(termo, max_val=None):
+    query = termo.replace(" ", "+")
+    url = f"https://news.google.com/rss/search?q={query}"
 
-    soup = BeautifulSoup(r.text, "html.parser")
+    feed = feedparser.parse(url)
     resultados = []
 
-    for p in soup.select("div.s-result-item")[:10]:
-        titulo_el = p.select_one("h2 span")
-        preco_whole = p.select_one(".a-price-whole")
-        preco_fraction = p.select_one(".a-price-fraction")
-        link_el = p.select_one("h2 a")
+    for entry in feed.entries[:10]:
+        titulo = entry.title
+        link = entry.link
 
-        if not (titulo_el and preco_whole and preco_fraction and link_el):
-            continue
+        preco = extrair_preco(titulo)
 
-        titulo = titulo_el.text.strip()
-        preco_txt = preco_whole.text.strip() + "," + preco_fraction.text.strip()
-        preco_float = parse_price_to_float(preco_txt)
-        link = "https://www.amazon.com.br" + link_el.get("href")
+        if max_val and preco:
+            if preco > max_val:
+                continue
 
-        if max_val and preco_float and preco_float > max_val:
-            continue
-
-        resultados.append((titulo, f"R$ {preco_txt}", link))
+        resultados.append((titulo, link, preco))
 
     return resultados
 
@@ -112,14 +108,16 @@ def main():
         try:
             for termo, max_val in termos:
                 print("Buscando:", termo)
-                resultados = buscar_amazon_requests(termo, max_val)
-                for titulo, preco, link in resultados:
-                    enviar_oferta(termo, titulo, preco, link, "Amazon")
+                resultados = buscar_google_rss(termo, max_val)
+
+                for titulo, link, preco in resultados:
+                    enviar_oferta(termo, titulo, link, preco)
+
         except Exception as e:
             print("Erro geral:", e)
 
-        print("Aguardando 1 hora para próxima busca...")
-        time.sleep(3600)  # roda a cada 1 hora
+        print("Aguardando 30 minutos para próxima busca...")
+        time.sleep(1800)
 
 if __name__ == "__main__":
     main()
