@@ -1,5 +1,4 @@
 import os
-import time
 import asyncio
 import re
 import feedparser
@@ -56,15 +55,25 @@ def carregar_produtos():
 
     return termos
 
-# ================= BUSCAR GOOGLE RSS =================
+# ================= BUSCAR GOOGLE RSS (BR + PRODUTO) =================
 def buscar_google_rss(termo, max_val=None):
-    query = termo.replace(" ", "+")
-    url = f"https://news.google.com/rss/search?q={query}"
+
+    query = (
+        f'{termo} "R$" (comprar OR loja OR promoção) '
+        f'-review -análise -notícia -youtube when:7d'
+    )
+
+    query = query.replace(" ", "+")
+
+    url = (
+        f"https://news.google.com/rss/search?q={query}"
+        f"&hl=pt-BR&gl=BR&ceid=BR:pt-419"
+    )
 
     feed = feedparser.parse(url)
     resultados = []
 
-    for entry in feed.entries[:10]:
+    for entry in feed.entries[:15]:
         titulo = entry.title
         link = entry.link
         preco = extrair_preco(titulo)
@@ -85,9 +94,11 @@ async def main():
         try:
             for termo, max_val in termos:
                 print("Buscando:", termo)
+
                 resultados = buscar_google_rss(termo, max_val)
 
                 for titulo, link, preco in resultados:
+
                     if link in enviados:
                         continue
 
@@ -96,7 +107,7 @@ async def main():
                     preco_texto = f"💰 <b>R$ {preco:.2f}</b>\n" if preco else ""
 
                     msg = (
-                        f"🔎 <b>Google Shopping</b>\n"
+                        f"🇧🇷 <b>Oferta encontrada</b>\n"
                         f"📦 <b>{termo}</b>\n"
                         f"{preco_texto}"
                         f"🔗 <a href='{link}'>Abrir oferta</a>\n\n"
