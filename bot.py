@@ -75,8 +75,11 @@ def criar_driver():
     options.add_argument("--disable-dev-shm-usage")
     options.add_argument("--disable-gpu")
     options.add_argument("--window-size=1920,1080")
+
+    # Caminhos corretos no Railway
     options.binary_location = "/usr/bin/chromium"
-    service = Service(ChromeDriverManager().install())
+    service = Service("/usr/bin/chromedriver")
+
     return webdriver.Chrome(service=service, options=options)
 
 # ================= BUSCAR AMAZON =================
