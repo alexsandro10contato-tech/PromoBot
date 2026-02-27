@@ -1,0 +1,13 @@
+# Lista de termos para pesquisar + limites opcionais
+# Formato: termo | max=VALOR | min=VALOR
+# Ex.: ssd nvme 1tb | max=600
+# Ex.: iphone 13 | max=2500
+# Ex.: rtx 4060 | min=1200 | max=1800
+
+monitor 144hz | max=900
+cadeira gamer
+
+ryzen 5 5500 max=600
+placa mae a520m max=350
+memoria ram ddr4 max=600
+placa de video rx580 max=600
